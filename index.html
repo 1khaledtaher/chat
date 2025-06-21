@@ -274,6 +274,7 @@
         let editingMessageId = null;
         let replyingToMessage = null;
         let isAdmin = false;
+        let unsubscribe; // To prevent multiple listeners
 
         // --- Theme Toggle Logic ---
         const applyTheme = (theme) => {
@@ -301,9 +302,7 @@
                 sessionStorage.setItem('isAdmin', 'true');
                 alert("تم تفعيل وضع الأدمن بنجاح!");
                 clearChatButton.style.display = 'inline-block';
-                // Re-render messages to show admin controls
-                messagesContainer.innerHTML = '';
-                listenForMessages(true);
+                listenForMessages(true); // Force reload messages with admin view
             } else if (password) {
                 alert("كلمة المرور غير صحيحة.");
             }
@@ -326,31 +325,37 @@
             }
         };
 
-
-        // --- Username Modal & Ban Check ---
-        const saveUsername = async () => {
-            const username = usernameModalInput.value.trim();
-            if (!username) {
-                alert("من فضلك أدخل اسمك!");
-                return;
-            }
-            // Check if user is banned
+        // --- User Initialization and Ban Check ---
+        const initializeUserSession = async (username) => {
+            // 1. Check if user is banned
             const banDoc = await db.collection('bannedUsers').doc(username).get();
             if (banDoc.exists) {
                 alert("عذراً، لقد تم حظرك من هذه المحادثة.");
+                localStorage.removeItem('chatUsername'); // Clear bad username from storage
+                usernameModal.style.display = 'flex'; // Show modal to try another name
                 return;
             }
 
-            localStorage.setItem('chatUsername', username);
+            // 2. If not banned, proceed to set up the chat session
             currentUsername = username;
+            localStorage.setItem('chatUsername', username);
             usernameModal.style.display = 'none';
             messageInput.focus();
-            checkAdminStatus(); // Check if this user is also an admin
+            checkAdminStatus();
             listenForMessages();
         };
-        saveUsernameButton.addEventListener('click', saveUsername);
-        usernameModalInput.addEventListener('keypress', (e) => e.key === 'Enter' && saveUsername());
 
+        const handleUsernameSubmit = () => {
+            const usernameFromInput = usernameModalInput.value.trim();
+            if (usernameFromInput) {
+                initializeUserSession(usernameFromInput);
+            } else {
+                alert("من فضلك أدخل اسمك!");
+            }
+        };
+
+        saveUsernameButton.addEventListener('click', handleUsernameSubmit);
+        usernameModalInput.addEventListener('keypress', (e) => e.key === 'Enter' && handleUsernameSubmit());
 
         // --- Reply and Edit Logic ---
         window.replyToMessage = (id, sender, encodedText) => {
@@ -444,7 +449,6 @@
                 </a>`;
             }
             
-            // Hide sender name for own messages
             const senderHTML = isSent ? '' : `<div class="message-sender">${data.sender}</div>`;
 
             let actionsHTML = `<div class="message-actions">
@@ -473,25 +477,27 @@
         };
 
         // --- Firestore Listener (Optimized) ---
-        let unsubscribe; // To prevent multiple listeners
         const listenForMessages = (forceReload = false) => {
-            if (unsubscribe) unsubscribe(); // Stop previous listener
+            if (unsubscribe) unsubscribe(); 
             
             if (forceReload) messagesContainer.innerHTML = '';
 
             unsubscribe = db.collection("messages").orderBy("timestamp", "asc")
               .onSnapshot(snapshot => {
                 snapshot.docChanges().forEach(change => {
+                    const docId = `message-${change.doc.id}`;
                     if (change.type === 'added') {
-                        const messageElement = renderMessage(change.doc);
-                        messagesContainer.appendChild(messageElement);
-                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        if (!document.getElementById(docId)) { // Prevent duplicates on admin force reload
+                           const messageElement = renderMessage(change.doc);
+                           messagesContainer.appendChild(messageElement);
+                           messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                        }
                     }
                     if (change.type === 'modified') {
-                        document.getElementById(`message-${change.doc.id}`)?.replaceWith(renderMessage(change.doc));
+                        document.getElementById(docId)?.replaceWith(renderMessage(change.doc));
                     }
                     if (change.type === 'removed') {
-                        document.getElementById(`message-${change.doc.id}`)?.remove();
+                        document.getElementById(docId)?.remove();
                     }
                 });
             });
@@ -504,7 +510,7 @@
             applyTheme(savedTheme);
 
             if (storedUsername) {
-                saveUsername(); // This will handle the ban check and start the listener
+                initializeUserSession(storedUsername);
             } else {
                 usernameModal.style.display = 'flex';
             }
